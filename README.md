@@ -1,6 +1,9 @@
-# CMP170HX-TensorFold — GLM-5.3-Flash on 4× Intel CMP 170HX（已验证部署方案）
+<a id="readme-zh"></a>
+# CMP170HX-TensorFold — GLM-5.3-Flash on 4× NVIDIA CMP 170HX（已验证部署方案）
 
-> **English TL;DR** — This repository is a complete, tested-working deployment of [TensorFold](https://github.com/ashhart/TensorFold) (v0.6.6 + our modifications) serving **GLM-5.3-Flash** on **4× Intel CMP 170HX** (GA100-class `sm_80` compute GPUs over PCIe Gen2 x4, no P2P): bit-exact 4-rank tensor parallelism, a host-staged shared-memory all-gather, bf16 gather payloads, block-diagonal fused projections, context copy-drafts, cost-aware draft depth and a widened CUDA-graph capture (verify windows R=1..8), plus MLX-affine W4A16 checkpoint support with DFlash2 + MTP speculative decoding. Measured **199.4 tok/s structured (single stream)** on the in-repo stack — **+17.2% over the EXL3-stack plateau (170.1)** — with the exactness contract `drafted == serial` (SHA-256 `0436adfa…`) maintained across quantization formats. A production reference stack on the same hardware serves 288–289 tok/s.
+中文（下文）｜ [English](#english)
+
+> **English TL;DR** — This repository is a complete, tested-working deployment of [TensorFold](https://github.com/ashhart/TensorFold) (v0.6.6 + our modifications) serving **GLM-5.3-Flash** on **4× NVIDIA CMP 170HX** (GA100-class `sm_80` compute GPUs over PCIe Gen2 x4, no P2P): bit-exact 4-rank tensor parallelism, a host-staged shared-memory all-gather, bf16 gather payloads, block-diagonal fused projections, context copy-drafts, cost-aware draft depth and a widened CUDA-graph capture (verify windows R=1..8), plus MLX-affine W4A16 checkpoint support with DFlash2 + MTP speculative decoding. Measured **199.4 tok/s structured (single stream)** on the in-repo stack — **+17.2% over the EXL3-stack plateau (170.1)** — with the exactness contract `drafted == serial` (SHA-256 `0436adfa…`) maintained across quantization formats. A production reference stack on the same hardware serves 288–289 tok/s.
 
 ---
 
@@ -134,4 +137,150 @@ python cmp170hx/scripts/tf4_ab_bench.py --profile dflash --tag my_run --exactnes
 
 - TensorFold 由 [ashhart](https://github.com/ashhart/TensorFold) 与 TensorFold contributors 开发，**Apache-2.0**（0.6.0 起；此前 MIT，见 `LICENSES/` 与 `NOTICE`）。本仓库保留原始 `LICENSE`/`NOTICE`/`THIRD_PARTY_NOTICES.md`，修改部分同样以 Apache-2.0 发布。
 - 感谢上游在 PR #464/#465 review 中的快速反馈；shm all-gather 的 arrival-flag 协议由本方案设计并在 4×CMP 170HX 上实测（见 `cmp170hx/results/`）。
+- **Morrowmake** —— 同硬件生产参考栈（1.7.2 · TP4，288–289 tok/s），本方案全程以它为对照基准；其预编译 sm_80 Marlin 内核模块（`_ampere_marlin_C`）亦为本仓库微基准脚本（`cmp170hx/scripts/marlin_microbench.py`）的参照实现。
 - GLM-5.3-Flash 权重、DFlash2 drafter 归其各自权利人所有，本仓库不含任何模型权重。
+
+---
+
+<a id="english"></a>
+
+# CMP170HX-TensorFold — GLM-5.3-Flash on 4× NVIDIA CMP 170HX (Verified Deployment)
+
+[中文](#readme-zh) ｜ English
+
+> **TL;DR** — A complete, tested-working deployment of [TensorFold](https://github.com/ashhart/TensorFold) (v0.6.6 + our modifications) serving **GLM-5.3-Flash** on **4× NVIDIA CMP 170HX** (GA100-class `sm_80` compute GPUs over PCIe Gen2 x4, no P2P): bit-exact 4-rank tensor parallelism, a host-staged shared-memory all-gather, bf16 gather payloads, block-diagonal fused projections, context copy-drafts, cost-aware draft depth and a widened CUDA-graph capture (verify windows R=1..8), plus MLX-affine W4A16 checkpoint support with DFlash2 + MTP speculative decoding. Measured **199.4 tok/s structured (single stream)** on the in-repo stack — **+17.2% over the EXL3-stack plateau (170.1)** — with the exactness contract `drafted == serial` (SHA-256 `0436adfa…`) maintained across quantization formats. A production reference stack on the same hardware serves 288–289 tok/s.
+
+---
+
+## 1. What this is
+
+This repository contains:
+
+1. **The complete working source tree** — upstream TensorFold `v0.6.6` plus **all our modifications** for 4× CMP 170HX (17 files modified + 3 new files, see [`cmp170hx/CHANGES.md`](cmp170hx/CHANGES.md)), file-for-file identical to the deployment state that passed the tests.
+2. **The full diff** — [`cmp170hx/full-changes-vs-v0.6.6.patch`](cmp170hx/full-changes-vs-v0.6.6.patch) (every change vs upstream v0.6.6, reviewable on its own).
+3. **Run/benchmark scripts** — [`cmp170hx/scripts/`](cmp170hx/scripts/): the 4-rank launchers (EXL3 and W4A16 affine variants), the MiaAI-protocol benchmark, extension pre-builds, bit-exact A/B tests.
+4. **Test reports** — [`cmp170hx/results/`](cmp170hx/results/): the S-series experiments (S0 profile / S1 shm / S2 bf16 / S3b / S5), kernel challenges, the W4A16 windows, the breakthrough receipts and the master TEST-MATRIX.
+
+The original upstream README is preserved at [`docs/UPSTREAM-README.md`](docs/UPSTREAM-README.md); the GLM-5.3-Flash recipe is at [`docs/recipes/glm-5.3-flash.md`](docs/recipes/glm-5.3-flash.md).
+
+### Why CMP 170HX needs a different setup
+
+The CMP 170HX is a compute card on the GA100 (`sm_80`) die and conflicts with the upstream CUDA mainline (Ada `sm_89+`, relying on FP8 MMA and NVFP4/clusters) in three hard ways:
+
+| Upstream assumption | CMP 170HX reality | This repo's answer |
+|---|---|---|
+| Build floor `MIN_CAPABILITY = 8.9` (FP8 MMA) | sm_80, no FP8 | `TENSORFOLD_MIN_CAPABILITY=8.0` env admission (can only lower the floor; FP8/NVFP4 paths stay refused) |
+| NVFP4/cluster extensions need sm_90+ | sm_80 | every e4m3 inline-PTX site gets an architecture guard; compiles on sm_80, FP8 paths trap |
+| Two-machine TP2 (NVLink-C2C scenario) | single node, 4 cards, PCIe Gen2 x4, **no P2P runtime** | `--tp 4` (ranks 0–3) + a host-staged shared-memory all-gather (S1) that bypasses NCCL small-message latency |
+
+## 2. Measured results (4× CMP 170HX · GLM-5.3-Flash · MiaAI protocol, median of 3)
+
+| Configuration | structured | coding | prose | delta |
+|---|---:|---:|---:|---|
+| Serial `--no-drafts` | 46.7 | 46.7 | 46.6 | — |
+| NCCL + DFlash2 (4-rank) | 102.8 | 80.8 | 61.4 | — |
+| **+ S1** host-staged shm all-gather (`TF_SHM_AG=1`) | 124.9 | 98.1 | 75.1 | **+21.5%** |
+| **+ S2** bf16 gather payload (`TF_BF16_GATHER=1`) | 169.8 | 132.7 | 93.6 | **+65%** cumulative |
+| + fbgb block-diagonal fusion / cost-aware depth / copy-drafts | 170.1 | 133.1 | 93.9 | EXL3-stack plateau |
+| **W4A16 affine + `GRAPH_ROWS=(1..8)`** | **199.4** | **142.6** | **101.5** | **+17.2% (this repo's stack record)** |
+| Production reference (Morrowmake 1.7.2 · TP4 · same hardware) | 288–289 | — | — | comparison |
+
+- **Exactness (hard gate)**: `drafted == serial` (SHA-256 identical) for every configuration, and the lineage `0436adfa…` stays bit-identical across quantization formats (EXL3 4bpw ↔ W4A16 affine g64).
+- Side measurement: the W4A16 affine path drafts with a higher acceptance rate (0.776 vs 0.757; probe-level accept 0.97 / 6.25 tok/round) — quantization fidelity converts directly into speculative-decoding gains.
+- Diagnosis tool: `TF_DECODE_PROF=1` (torch.profiler kernel table of the first eager round, built into `decode.py`). It located the culprit — the eager-round shm gather spinning at 92% — which led to the one-line graph-capture widening (`GRAPH_ROWS=(1..8)`) worth +17.2%.
+
+## 3. Hardware / software
+
+| Item | Reference value |
+|---|---|
+| GPU | 4× NVIDIA CMP 170HX 64GB (GA100, **sm_80**), PCIe Gen2 x4, no P2P (optional ForceP2P) |
+| Driver / CUDA | 610.43.03 / torch `2.13.0+cu130` |
+| Python | 3.12 |
+| Checkpoints | **EXL3 4bpw**: `brandonmusic/GLM-5.3-Flash-tr3-4bpw` (HF; mirror via `HF_ENDPOINT=https://hf-mirror.com`); **W4A16 affine**: MLX 4-bit g64 + embedded MTP head (~170 GB) |
+| Drafter | `incoai/GLM-5.3-Flash-DFlash2` (DFlash2 block drafts; only +0.56 GiB per rank) |
+
+> Weights and the drafter are **not distributed with this repository**; follow their own licenses.
+
+## 4. All modifications (details in [cmp170hx/CHANGES.md](cmp170hx/CHANGES.md))
+
+vs upstream v0.6.6: **17 files modified + 3 new files**; the full diff is [`cmp170hx/full-changes-vs-v0.6.6.patch`](cmp170hx/full-changes-vs-v0.6.6.patch).
+
+| Topic | Files | One-liner |
+|---|---|---|
+| sm_80 admission | `cuda/build.py` | `TENSORFOLD_MIN_CAPABILITY` lowers the floor (never raises) + Ampere hint |
+| sm_80 compilability | `cuda/kernels/qmm_prefill8.cu` | architecture guards for the e4m3 inline PTX |
+| **S1** shm all-gather | `cuda/_shm_allgather.cu` (new) + `cuda/shm_allgather.py` (new) + `cuda/comm.py` | world=4 host-staged one-shot all-gather (arrival-flag protocol, bit-exact, graph-capturable), NCCL fallback |
+| **S2** bf16 payload | `glue.py` / `forward.py` | bf16 gather path (bit-preserving), `TF_BF16_GATHER=1` |
+| fbgb fusion | `glue.py` / `weights.py` | `f_b+g_b` block-diagonal [2N, K+K] single GEMM, `TF_FUSE_FBGB=1` |
+| **TP4** | `cli.py` / `cli_args.py` / `engine.py` / `weights.py` / `split.py` | `--tp 4`, ranks 0–3, `RankReader(ranks=world)` (head/group boundaries preserved) |
+| Graph capture widening | `engine.py` | `GRAPH_ROWS=(1..8)` (was 1..6) — verify windows R=7/8 enter graph replay |
+| copy-drafts | `glm5_next/cuda/copy_drafts.py` (new) + `drafter_choice.py` | context copy-drafts port (`TENSORFOLD_COPY_DRAFTS=0` to disable) |
+| Cost-aware depth | `drafter_choice.py` | per-round D+F arm choice, robust to distribution drift |
+| W4A16 affine | `weights.py` | MLX affine 4-bit g64 checkpoint loading (same engine as EXL3) |
+| Diagnosis | `decode.py` | `TF_DECODE_PROF=1` kernel-table hook |
+| Qwen family sync | `qwen4_exp/cuda/engine.py` | the same world/graph handling for the Qwen family |
+
+## 5. Quick start
+
+```bash
+git clone https://github.com/liumorrisclaw/CMP170HX-TensorFold.git
+cd CMP170HX-TensorFold
+pip install -e .            # or run cmp170hx/scripts/prebuild066.py first to pre-build the four extensions (~1 h, reusable)
+
+# Weights (download yourself per §3; default dirs at the top of cmp170hx/scripts/tf4_serve066.sh)
+#   EXL3:      ~/tensorfold-poc/weights/glm53-tr3-4bpw
+#   W4A16:     ~/tensorfold-poc/weights/glm53-mlx-4bit-mtp
+#   DFlash2:   ~/glm53-recipe/models/GLM-5.3-Flash-DFlash2
+
+# EXL3 4-rank serve (dflash profile)
+TF_SHM_AG=1 TF_BF16_GATHER=1 TENSORFOLD_MIN_CAPABILITY=8.0 \
+  bash cmp170hx/scripts/tf4_serve066.sh dflash
+
+# W4A16 affine (the record config; GRAPH_ROWS=(1..8) already built in)
+TF_SHM_AG=1 TF_BF16_GATHER=1 TENSORFOLD_MIN_CAPABILITY=8.0 \
+  bash cmp170hx/scripts/tf4_serve066_mlx.sh dflash
+
+# Benchmark (median of 3 + exactness)
+python cmp170hx/scripts/tf4_ab_bench.py --profile dflash --tag my_run --exactness
+```
+
+Loading takes ~15–25 minutes (164 GB of weights split across ranks; the first run builds the extensions, later runs reuse them via `TORCH_EXTENSIONS_DIR`). After READY: `curl 127.0.0.1:8899/health`.
+
+## 6. Runtime switches
+
+| Variable | Effect | Default |
+|---|---|---|
+| `TENSORFOLD_MIN_CAPABILITY=8.0` | sm_80 admission (**required**) | — |
+| `TF_SHM_AG=1` | S1 host-staged shm all-gather (world=4) | off |
+| `TF_BF16_GATHER=1` | S2 bf16 gather payload | off |
+| `TF_FUSE_FBGB=1` | f_b+g_b block-diagonal fusion | off |
+| `TF_FUSE_GSUM_MIX=1` | hc_mix folded into the gather kernel (measured neutral; kept for reuse) | 0 |
+| `TF_DECODE_PROF=1` | kernel table of the first eager round (torch.profiler) | 0 |
+| `TENSORFOLD_COPY_DRAFTS=0` | disable copy-drafts | on |
+| `GRAPH_ROWS` | `engine.py` constant; this repo defaults to `(1..8)` | — |
+
+## 7. Repository layout
+
+```
+├── src/ tests/ tools/ docs/ assets/   # TensorFold source tree (v0.6.6 + all modifications in this repo)
+├── cmp170hx/
+│   ├── CHANGES.md                     # file-by-file change notes
+│   ├── full-changes-vs-v0.6.6.patch   # complete diff vs upstream v0.6.6
+│   ├── patches/                       # the 3 patches originally submitted upstream (PR #464/#465 series)
+│   ├── scripts/                       # serve / bench / pre-build / bit-exact A/B scripts
+│   └── results/                       # test reports and receipts (incl. the master TEST-MATRIX)
+└── docs/UPSTREAM-README.md            # the original upstream README (kept)
+```
+
+## 8. Upstream collaboration
+
+- **PR #464** (sm_80 admission) and **PR #465** (GLM 4-rank) were relanded into main by the upstream author with our authorship (`23f4e7f`/`c87248d`/`f39624d`).
+- **PR #466** (the fresh shm all-gather rewrite, `ecf6848`) is OPEN, awaiting upstream re-review.
+- This repo's shm all-gather has zero drift against upstream `python-0.6`'s `comm.py` and can be merged directly.
+
+## 9. License & acknowledgments
+
+- TensorFold is developed by [ashhart](https://github.com/ashhart/TensorFold) and TensorFold contributors, licensed **Apache-2.0** (from 0.6.0; earlier MIT — see `LICENSES/` and `NOTICE`). This repository keeps the original `LICENSE`/`NOTICE`/`THIRD_PARTY_NOTICES.md`; the modifications are published under Apache-2.0 as well.
+- Thanks to the upstream author for the fast review turnaround on PRs #464/#465; the shm all-gather's arrival-flag protocol was designed in this project and verified on 4× CMP 170HX (see `cmp170hx/results/`).
+- **Morrowmake** — the production reference stack on the same hardware (1.7.2 · TP4, 288–289 tok/s) that served as the comparison baseline throughout this project; its prebuilt sm_80 Marlin kernel module (`_ampere_marlin_C`) is also the reference implementation for this repo's microbenchmark (`cmp170hx/scripts/marlin_microbench.py`).
+- The GLM-5.3-Flash weights and the DFlash2 drafter belong to their respective owners; this repository contains no model weights.
