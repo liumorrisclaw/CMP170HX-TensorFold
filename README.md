@@ -1,4 +1,4 @@
-# TensorFold · GLM-5.3-Flash · 4× Intel CMP 170HX — 已验证部署方案
+# CMP170HX-TensorFold — GLM-5.3-Flash on 4× Intel CMP 170HX（已验证部署方案）
 
 > **English TL;DR** — This repository is a complete, tested-working deployment of [TensorFold](https://github.com/ashhart/TensorFold) (v0.6.6 + our modifications) serving **GLM-5.3-Flash** on **4× Intel CMP 170HX** (GA100-class `sm_80` compute GPUs over PCIe Gen2 x4, no P2P): bit-exact 4-rank tensor parallelism, a host-staged shared-memory all-gather, bf16 gather payloads, block-diagonal fused projections, context copy-drafts, cost-aware draft depth and a widened CUDA-graph capture (verify windows R=1..8), plus MLX-affine W4A16 checkpoint support with DFlash2 + MTP speculative decoding. Measured **199.4 tok/s structured (single stream)** on the in-repo stack — **+17.2% over the EXL3-stack plateau (170.1)** — with the exactness contract `drafted == serial` (SHA-256 `0436adfa…`) maintained across quantization formats. A production reference stack on the same hardware serves 288–289 tok/s.
 
@@ -75,8 +75,8 @@ CMP 170HX 是 GA100（sm_80）核心的算力卡，与上游 CUDA 主线（Ada s
 ## 5. 快速开始
 
 ```bash
-git clone https://github.com/liumorrisclaw/TensorFold-CMP170HX.git
-cd TensorFold-CMP170HX
+git clone https://github.com/liumorrisclaw/CMP170HX-TensorFold.git
+cd CMP170HX-TensorFold
 pip install -e .            # 或先跑 cmp170hx/scripts/prebuild066.py 预编译四大扩展（约 1 小时，可复用）
 
 # 权重（按上面第 3 节自行下载；脚本默认目录见 cmp170hx/scripts/tf4_serve066.sh 头部）
