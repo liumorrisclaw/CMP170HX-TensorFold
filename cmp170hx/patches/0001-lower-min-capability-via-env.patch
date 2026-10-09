@@ -1,0 +1,24 @@
+--- a/src/tensorfold/cuda/build.py
++++ b/src/tensorfold/cuda/build.py
+@@ -12,6 +12,21 @@
+ 
+ MIN_CAPABILITY = (8, 9)         # FP8 MMA and e4m3 conversions (Ada); kernels with clusters use them from 9.0
+ CLUSTERS = (9, 0)               # extensions built only on thread-block clusters (NVFP4) need Hopper or newer
++
++def _env_floor() -> tuple[int, int]:
++    """TENSORFOLD_MIN_CAPABILITY=8.0 lowers the floor for FP8-free paths (sm_80 POC: W4A16/EXL3 on Ampere).
++
++    Runs at import, before the ``need`` defaults below bind; it can only lower the floor, never raise it.
++    """
++    raw = os.environ.get("TENSORFOLD_MIN_CAPABILITY", "").strip()
++    if not raw:
++        return MIN_CAPABILITY
++    major, minor = (int(part) for part in raw.split("."))
++    lowered = (major, minor)
++    return lowered if lowered < MIN_CAPABILITY else MIN_CAPABILITY
++
++
++MIN_CAPABILITY = _env_floor()
+ # stop first: when the lock goes, a waiting start imports whatever module is there without building, even an old one
+ HINT = "if no other build is running, a killed build left it: stop this start, delete the lock and start again"
+ LOCK_WAIT_SECONDS = 60.0        # a start still waiting on the same lock this long says so again
