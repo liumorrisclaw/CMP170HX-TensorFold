@@ -88,7 +88,7 @@ tools/                  重合检查器等工具
 ## 致谢
 
 - TensorFold 引擎框架：[ashhart/TensorFold](https://github.com/ashhart/TensorFold)（Apache/MIT）
-- host-shm collective 思想：Morrowmake（思想署名，实现为本项目原创）
+- host-shm collective 思想参考
 - copy-drafts 思想：BobClawblaw（上游 PR #468）
 
 ## 许可
