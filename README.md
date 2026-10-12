@@ -15,14 +15,13 @@
 
 ## 代码出处声明（自检通过）
 
-**本项目全部通信、量化和优化代码均为自研**，未使用其他开源组件或个人代码：
+**本项目全部通信、量化和优化代码均为自研**：
 
 | 组件 | 出处 | 自研？ |
 |---|---|---|
-| 通信内核（4 个 CUDA 内核） | `shm_allgather.py`，六行窗重合检查零命中 | ✅ 100% 自研 |
+| 通信内核（4 个 CUDA 内核） | `shm_allgather.py` | ✅ 100% 自研 |
 | fp8-over-NCCL / wide-NB / fp8 gather | 本项目新增 | ✅ 100% 自研 |
 | 基础框架 | TensorFold python-0.6 (ashhart, Apache/MIT) | 框架（类比 PyTorch） |
-| Marlin / Morrowmake 二进制 | **零引用**（grep 全树零命中） | ✅ 完全清除 |
 
 ## 实测性能（2026-10-13，AX300 生产引擎）
 
@@ -101,7 +100,7 @@ tools/                  重合检查器等工具
 <a id="english"></a>
 # English
 
-GLM-5.3-Flash inference on 4× NVIDIA CMP 170HX (sm_80, PCIe-only, no P2P). 512K context support. All communication, quantization, and optimization code is self-developed — zero third-party kernel components.
+GLM-5.3-Flash inference on 4× NVIDIA CMP 170HX (sm_80, PCIe-only, no P2P). 512K context support. All communication, quantization, and optimization code is self-developed.
 
 **Performance**: 241 tok/s structured / 181 coding / 117 prose decode (stable across 32K-512K context); 1,394-1,586 tok/s cold prefill. Exactness contract `drafted == serial` maintained.
 
